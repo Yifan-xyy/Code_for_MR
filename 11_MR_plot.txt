@@ -1,0 +1,93 @@
+library(Oneclick)  
+dat <- fread("DTI_2_Disease_harmonised_final4.csv")  
+res <- fread("DTI_2_Disease_res_sig (2).csv")  
+# get_flextable_defaults()  
+set_flextable_defaults(font.family = "Times New Roman", font.size = 11)  
+ivw_sig <- subset(res, res$`pval_Inverse variance weighted` < 0.05)  
+dat_sig <- dplyr::inner_join(dat, ivw_sig[, c('id.outcome', 'id.exposure')])  
+  
+library(Oneclick)  
+library(dplyr)  
+library(flextable)  
+library(fdrtool)  
+library(data.table)  
+require(dplyr)  
+require(flextable)  
+require(officer)  
+require(ggplot2)  
+dat <- fread("DTI_2_Disease_harmonised_final4.csv")  
+res <- fread("DTI_2_Disease_res_sig (2).csv")  
+ivw_sig <- subset(res, res$`pval_Inverse variance weighted` < 0.05)  
+dat_sig <- dplyr::inner_join(dat, ivw_sig[, c('id.outcome', 'id.exposure')], by = dplyr::join_by(id.outcome, id.exposure))  
+  
+# Plot forest plot  
+P1 <- U7_forest_plot(ivw_sig)  
+# Plot scatter plot  
+P2 <- U7_scatter_plot(ivw_sig, dat_sig, point_size = 2, linewidth = 1, ggsci_color = ggsci::scale_color_aaas())  
+# Plot leave-one-out plot  
+Figure_S <- mr_leaveoneout_plot(mr_leaveoneout(dat_sig))  
+  
+##### Export to Word ##########################################  
+dir.create("result")  
+doc_FS <- R1_start_docx()  
+for (i in 1:length(Figure_S)) {  
+  Figure_S_temp <- Figure_S[[i]]  
+  text = paste0("Figure S", i, ". Leave-one-out plot of ", unique(Figure_S_temp[["data"]][["exposure"]]), ' on ', unique(Figure_S_temp[["data"]][["outcome"]]), ".")  
+  doc_FS <- R2_add_text(doc_FS, text = text) %>%  
+    R4_add_figure(Figure_S_temp)  
+}  
+print(doc_FS, target = "result/Supplementary Figure.docx")  
+  
+doc_F <- R1_start_docx() %>%  
+  R2_add_text(text = "Figure 1. Forestplot") %>%  
+  R4_add_figure(P1, width = 12, height = 7) %>%  
+  R5_set_previous_section_landscape(pagewidth = 42 / 2.54, pageheight = 29.7 / 2.54) %>%  
+  print(doc_F, target = "result/Figure.docx")  
+  
+doc_F <- R1_start_docx() %>%  
+  R2_add_text(text = "Scatter plot") %>%  
+  R4_add_figure(P2, width = 16, height = 16) %>%  
+  R5_set_previous_section_landscape(pagewidth = 42 / 2.54, pageheight = 42 / 2.54, orient = "portrait") %>%  
+  print(doc_F, target = "result/ScatterFigure.docx")
+
+###########a method for better forest##################
+######Take BD as an example#######
+dt <- fread("E:/MR_plot/data/BD.csv")
+dt<-dt[,1:13]###Select all rows of the required columns
+dt$` ` <- paste(rep(" ", 20), collapse = " ")###Set an empty column for plotting the forest plot; 20 is the column width
+dt$'OR(95%CI)'<-ifelse(is.na(dt$or),"",
+                       sprintf('%.2f(%.2f to %.2f)',
+                               dt$or,dt$or_lci95,dt$or_uci95))
+###Combine the three columns or, or_lci95, or_uci95 into one column or(or_lci95, or_uci95)
+dt[is.na(dt)] <- " "   ###Replace missing values (NA) in the data with spaces
+ 
+tm <- forest_theme(base_size = 10,
+                   ci_pch = 20,
+                   ci_col = "#FF00B0",  #Color of effect sizes in the forest plot
+                   ci_lty = 1,
+                   ci_lwd = 2.3,
+                   ci_Theight = 0.2,
+                   refline_gp = gpar(lwd = 1.5, lty = "dashed", col = "red"),  # Reference line parameters
+                   summary_fill = "#FF00B0",
+                   summary_col = "#B1C670",
+                   footnote_gp = gpar(cex = 1.1, fontface = "italic", col = "blue"))  # New footnote parameters
+ 
+dt$or <- as.numeric(dt$or)  
+dt$or_lci95 <- as.numeric(dt$or_lci95)  
+dt$or_uci95 <- as.numeric(dt$or_uci95)  
+dt$p_value <- format(dt$p_value, scientific = TRUE)
+pdf("BD.pdf", width = 8, height = 6) 
+ 
+forest(dt[,c(1:3,10,11,7)],#Select data columns 1-4, 11-12 (place graph in the middle), and 8-10 as forest plot elements
+            est = dt$or,  ###Odds Ratio (OR)
+            lower = dt$or_lci95,  ###Lower limit of confidence interval
+            upper = dt$or_uci95,  ###Upper limit of confidence interval
+            sizes = 0.6,  ###Size of the point estimate box, mapped using standard error
+            ci_column = 4,  ###Column to display the confidence interval
+            ref_line = 1,  ###Location of the reference line on the X-axis
+            # xlim = c(0,2),  ###Range of the X-axis for the forest plot
+            # ticks_at = c(0,1,2),  ###Numbers to label on the X-axis of the forest plot
+            # arrow_lab = c('protective factor','risk factor'),  ###Text on the left and right of the X-axis
+            # footnote = 'P<0.05 was considered statistically significant',  ###Footnote text for the forest plot
+            theme = tm)  ###Forest plot theme
+dev.off()

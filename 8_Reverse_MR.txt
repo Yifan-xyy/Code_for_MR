@@ -1,0 +1,174 @@
+library(data.table)  
+library(rio)  
+library(Oneclick)  
+library(dplyr)  
+library(flextable)  
+library(fdrtool)  
+library(TwoSampleMR)  
+library(plinkbinr)  
+library(ieugwasr)  
+library(flextable)  
+library(fdrtool)  
+library(TwoSampleMR)  
+library(plinkbinr)  
+library(ieugwasr)  
+library(readr)  
+library(stringr)  
+  
+##### The following code has been designed. Please confirm the original IV folder, the processed IV output folder, and the column names to be modified in the original file, as well as the P and clump parameters.  
+  
+IV_folder_path <- "D:/GWAS_data/DTI_ukbiobank_mean"  # Original IV file storage folder  
+skipped_files <- file("skipped_files.txt", open = "w")  # Error log file  
+IV_files <- list.files(path = IV_folder_path, pattern = "\\.csv$", full.names = TRUE)  # Get file names with full paths  
+temp_dir <- "E:/univariable_MR_XYY"  # Output folder for processed data  
+  
+###########  
+for (file in IV_files) {  
+  data <- fread(file)  
+  data <- as.data.frame(data)  
+    
+  # Construct the complete path of the output file  
+  output_file <- file.path(temp_dir, paste0("IV_", matched_data$Phenotype[1], "_snp.csv"))  
+  fwrite(matched_data, output_file)  # write.csv() will automatically close the file after writing  
+}  
+# Print completion message  
+cat("Data from all eligible txt files has been successfully processed to select SNPs and convert phenotypes, and saved to the specified path.\n")  
+  
+### Clumping each file individually  
+setwd(temp_dir)  
+dir.create("IV_clump_summary")  
+  
+for (file in IV_snp_files) {  
+  tryCatch({  
+    # Try to read and process the file  
+    exposure_data <- read_exposure_data(  
+      file,  
+      chr_col = "chr",  
+      pos_col = "pos",  
+      phenotype_col = "Phenotype",  
+      snp_col = "SNP",  
+      beta_col = "beta",  
+      se_col = "se",  
+      eaf_col = "eaf",  
+      samplesize_col = "samplesize",  
+      effect_allele_col = "effect_allele",  
+      other_allele_col = "other_allele",  
+      pval_col = "pval",  
+      id_col = "Phenotype",  
+      sep = ","  
+    )  
+    exposure_local <- ld_clump(  
+      dplyr::tibble(rsid = exposure_data$SNP, pval = exposure_data$pval.exposure),  
+      clump_kb = 10000,  
+      clump_r2 = 0.001,  
+      plink_bin = "D:/R-4.4.1/library/plinkbinr/bin/plink_Windows.exe",  
+      bfile = "D:/OneclickDatabase/bfile/EUR"  
+    )  
+    exposure_clumped <- exposure_data[which(exposure_data$SNP %in% exposure_local$rsid), ]  
+    output_file <- file.path(output_clump_dir, paste0("IV_", exposure_clumped$exposure[1], "_clumped.csv"))  
+    fwrite(exposure_clumped, output_file)  
+  }, error = function(e) {  
+    # If an error occurs, print the file name and write it to the skipped_files.txt  
+    cat(sprintf("Error processing file '%s': %s\n", file, conditionMessage(e)), file = stderr())  
+    cat(basename(file), "\n", file = skipped_files, append = TRUE)  
+  })  
+}  
+close(skipped_files)  # Close the file  
+file.remove(IV_snp_files)  # Remove all snp files  
+cat("Clumping completed. Skipped files have been recorded in skipped_files.txt.\n")  
+  
+# Merge the clumped data to form an integrated file of IVs marked with Phenotypes.  
+setwd(output_clump_dir)  
+exposure_clump_files <- list.files(path = output_clump_dir, pattern = "_clumped\\.csv$")  
+combined_data <- NULL  
+for (file in exposure_clump_files) {  
+  temp_data <- fread(file)  
+  # If it is the first loop, assign temp_data to combined_data  
+  if (is.null(combined_data)) {  
+    combined_data <- temp_data  
+  } else {  
+    # Otherwise, merge data using rbindlist  
+    combined_data <- rbindlist(list(combined_data, temp_data), fill = TRUE)  
+  }  
+}  
+# Save the merged data to a new CSV file  
+fwrite(combined_data, "IV_final_clumped.csv")  
+cat("IVs processing completed.\n")  
+  
+outcome_folder_path <- "D:/GWAS_data/psychiatric_disorders"  # Folder path for outcomes  
+outcome_files <- list.files(outcome_folder_path, pattern = "\\.csv$", full.names = TRUE)  
+exposure_clumped_folder_path <- "E:/univariable_MR_XYY/IV_clump_summary"  
+exposure_clumped_files <- list.files(exposure_clumped_folder_path, pattern = "\\.csv$", full.names = TRUE)  
+exposure_clumped_summary_file <- fread("E:/univariable_MR_XYY/IV_final_clumped.csv")  
+  
+## Unify id names  
+exposure_clumped$id.exposure <- exposure_clumped$exposure  
+dir.create("Out_summary")  
+output_outcome_dir <- "E:/univariable_MR_XYY/Out_summary"  
+  
+#### Extract Outcomes containing all IVs, and save them as new files in the new folder, skip if already prepared.  
+for (file_path in outcome_files) {  
+  current_dt <- fread(file_path)  
+  outcome_temp_dt <- merge(current_dt, exposure_clumped_summary_file, by = "SNP", all.x = FALSE)  
+  basename(file_path))  
+  fwrite(outcome_temp_dt, outcome_temp_path)  
+}  
+  
+########################  
+######### Read the outcome files in the new folder, and harmonize them one by one, starting the loop operation.  
+outcome_snp_files <- list.files(output_outcome_dir, pattern = "\\.csv$", full.names = TRUE)  
+for (file_outcome in outcome_snp_files) {  
+  ##### For each outcome, create its storage folder first, and then read it.  
+  outcome_data <- read_outcome_data(  
+    file_outcome,  
+    snps = NULL,  
+    sep = ",",  
+    phenotype_col = "Phenotype",  
+    snp_col = "SNP",  
+    beta_col = "beta",  
+    se_col = "se",  
+    eaf_col = "eaf",  
+    effect_allele_col = "effect_allele",  
+    other_allele_col = "other_allele",  
+    pval_col = "pval",  
+    samplesize_col = "samplesize",  
+    min_pval = 1e-200,  
+    log_pval = FALSE,  
+    chr_col = "chr",  
+    pos_col = "pos"  
+  )  
+  outcome_data$id.outcome <- outcome_data$outcome  
+  harmonise_dat <- U4_harmonise_data(exposure_clumped, outcome_data)  
+  temp_file_path <- file.path(workspace, paste0(basename(file_outcome), "_harmonised.csv"))  
+  # Write the result to a new CSV file  
+  fwrite(harmonise_dat, temp_file_path)  
+}  
+cat("Harmonisation completed successfully.")  
+  
+# Merge harmonised files  
+outcome_harmonise_files <- list.files(path = workspace, pattern = "_harmonised\\.csv$")  
+combined_data <- NULL  
+for (file in outcome_harmonise_files) {  
+  temp_data <- fread(file)  
+  # If it is the first loop, assign temp_data to combined_data  
+  if (is.null(combined_data)) {  
+  } else {  
+    # Otherwise, merge data using rbindlist  
+    combined_data <- rbindlist(list(combined_data, temp_data), fill = TRUE)  
+  }  
+}  
+dir.create(paste0(workspace, "/", "forward_mr_res"))  
+res_temp_path <- file.path(paste0(workspace, "/", "forward_mr_res"), ("DTI_2_Disease_harmonised_final.csv"))  
+# Save the merged data to a new CSV file  
+fwrite(combined_data, res_temp_path)  
+cat("Harmonised data merging completed.\n")  
+file.remove(outcome_harmonise_files)  
+  
+res <- U5_mr(  
+  dat,  
+  method_list = c("mr_wald_ratio", "mr_egger_regression", "mr_weighted_median", "mr_ivw"),  
+  run_mr_presso = TRUE,  
+  workers = 11  
+)  
+res_temp_path <- file.path(paste0(workspace, "/", "forward_mr_res"), ("DTI_2_Disease_res_Presso.csv"))  
+fwrite(res, res_temp_path)

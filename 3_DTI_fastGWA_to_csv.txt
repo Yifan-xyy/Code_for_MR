@@ -1,0 +1,80 @@
+library(data.table)   
+library(Oneclick)   
+library(dplyr)   
+library(flextable)   
+library(fdrtool)   
+library(TwoSampleMR)   
+library(plinkbinr)   
+library(ieugwasr)   
+library(flextable)   
+library(fdrtool)   
+library(TwoSampleMR)   
+library(plinkbinr)   
+library(stringr)   
+  
+# Set the folder path for the IV files   
+IV_folder_path <- "D:/GWAS_data/DTI_ukbiobank_mean"   
+  
+# Initialize a file to record skipped files   
+skipped_files <- file("skipped_files.txt", open = "w")   
+  
+# List all files with the specified pattern in the IV folder   
+IV_files <- list.files(path = IV_folder_path, pattern = "\\.fastGWA$", full.names = TRUE)   
+  
+# Set the directory for processed data output   
+temp_dir <- "D:/GWAS_data/DTI_ukbiobank_mean"   
+  
+# Read the tag data for phenotype mapping   
+tag2_data <- read.csv("D:/MR_DTI_Psychiatry/Reverse_MR/Tag_2.csv")   
+  
+# Define a function to extract the phenotype number   
+extract_pheno_number <- function(x) {   
+  # Assume the phenotype format is "pheno123" or "someOtherText_pheno456"   
+  # We need to find the pattern where "pheno" is followed by numbers   
+  match <- str_match(x, "(pheno\\d+)")   
+  if (!is.na(match[, 2])) {   
+    return(match[, 2])   
+  } else {   
+    return(NA) # Return NA if no match is found   
+  }   
+}   
+  
+# Process each file in the IV folder   
+for (file in IV_files) {   
+  filtered_data <- fread(file)   
+  filtered_data <- as.data.frame(filtered_data)   
+  # Add a Phenotype column filled with the filename (including extension)   
+  filtered_data$Phenotype <- basename(file)   
+  
+  if ("Phenotype" %in% names(filtered_data)) {   
+    # Extract the pheno+number part   
+    filtered_data$pheno_number <- sapply(filtered_data$Phenotype[1], extract_pheno_number)   
+  
+    # Use left_join to match the extracted pheno_number with T1 and obtain the corresponding T2 value   
+    matched_data <- left_join(filtered_data, tag2_data, by = c("pheno_number" = "T1"))   
+    matched_data$Phenotype <- ifelse(!is.na(matched_data$T2), matched_data$T2, matched_data$Phenotype)   
+  
+    # Remove the T2 and pheno_number columns   
+    matched_data <- select(matched_data, -c(T2, pheno_number))   
+  }   
+  
+  # Rename columns   
+  colnames(matched_data)[colnames(matched_data) == "CHR"] <- "chr"   
+  colnames(matched_data)[colnames(matched_data) == "POS"] <- "pos"   
+  colnames(matched_data)[colnames(matched_data) == "SNP"] <- "SNP"   
+  colnames(matched_data)[colnames(matched_data) == "BETA"] <- "beta"   
+  colnames(matched_data)[colnames(matched_data) == "SE"] <- "se"   
+  colnames(matched_data)[colnames(matched_data) == "A1"] <- "effect_allele"   
+  colnames(matched_data)[colnames(matched_data) == "A2"] <- "other_allele"   
+  colnames(matched_data)[colnames(matched_data) == "AF1"] <- "eaf"   
+  colnames(matched_data)[colnames(matched_data) == "Phenotype"] <- "Phenotype"   
+  colnames(matched_data)[colnames(matched_data) == "N"] <- "samplesize"   
+  colnames(matched_data)[colnames(matched_data) == "P"] <- "pval"   
+  
+  # Construct the full path for the output file   
+  output_file <- file.path(temp_dir, paste0(matched_data$Phenotype[1], ".csv"))   
+  fwrite(matched_data, output_file)   
+}   
+  
+# Print completion message   
+cat("All eligible txt files have successfully completed SNP selection and phenotype conversion, and have been saved to the specified path.\n")

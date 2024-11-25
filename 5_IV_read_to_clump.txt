@@ -1,0 +1,137 @@
+library(data.table)   
+library(rio)   
+library(Oneclick)   
+library(dplyr)   
+library(flextable)   
+library(fdrtool)   
+library(TwoSampleMR)   
+library(plinkbinr)   
+library(ieugwasr)   
+library(flextable)   
+library(fdrtool)   
+library(TwoSampleMR)   
+library(plinkbinr)   
+library(ieugwasr)   
+library(readr)   
+library(stringr)   
+  
+# Set the folder path for the original IV files   
+IV_folder_path <- "D:/GWAS_data/DTI_ukbiobank_mean"   
+  
+# Initialize a file to record skipped files   
+skipped_files <- file("skipped_files.txt", open = "w")   
+  
+# List all files with the specified pattern in the IV folder   
+IV_files <- list.files(path = IV_folder_path, pattern = "\\.csv$", full.names = TRUE)   
+  
+# Set the directory for processed data output   
+temp_dir <- "E:/univariable_MR_XYY"   
+  
+# Read the tag data for phenotype mapping   
+tag2_data <- read_csv("D:/MR_DTI_Psychiatry/Reverse_MR/Tag_2.csv")   
+  
+# Process each file in the IV folder   
+for (file in IV_files) {   
+  data <- fread(file)   
+  data <- as.data.frame(data)   
+  if ("P" %in% names(data)) {   
+    # Filter based on p-value   
+    filtered_data <- data[data$P < 5e-8, ]   
+  } else {   
+    cat(paste0("Warning: No 'p.value' column found in ", file, "\n"))   
+  }   
+  
+  # Construct the full path for the output file   
+  output_file <- file.path(temp_dir, paste0("IV_", matched_data$Phenotype[1], "_snp.csv"))   
+  fwrite(matched_data, output_file)   
+}   
+  
+# Print completion message   
+cat("All eligible txt files have successfully completed SNP selection and phenotype conversion, and have been saved to the specified path.\n")   
+  
+# Set working directory to the temp directory   
+setwd(temp_dir)   
+  
+# Create a directory for clumped data summaries   
+dir.create("IV_clump_summary")   
+output_clump_dir <- "E:/univariable_MR_XYY/IV_clump_summary"   
+  
+# List all files with the specified pattern in the temp directory   
+IV_snp_files <- list.files(path = temp_dir, pattern = "_snp\\.csv$")   
+  
+# Process each file to perform clumping   
+for (file in IV_snp_files) {   
+  tryCatch({   
+    # Read and process the file   
+    exposure_data <- read_exposure_data(   
+      file,   
+      chr_col = "chr",   
+      pos_col = "pos",   
+      phenotype_col = "Phenotype",   
+      snp_col = "SNP",   
+      beta_col = "beta",   
+      se_col = "se",   
+      eaf_col = "eaf",   
+      samplesize_col = "samplesize",   
+      effect_allele_col = "effect_allele",   
+      other_allele_col = "other_allele",   
+      pval_col = "pval",   
+      id_col = "Phenotype",   
+      sep = ","   
+    )   
+  
+    # Perform clumping   
+    exposure_local <- ld_clump(   
+      dplyr::tibble(rsid = exposure_data$SNP, pval = exposure_data$pval.exposure),   
+      clump_kb = 10000, clump_r2 = 0.001,   
+      plink_bin = "D:/R-4.4.1/library/plinkbinr/bin/plink_Windows.exe",   
+      bfile = "D:/OneclickDatabase/bfile/EUR"   
+    )   
+  
+    # Filter the exposure data to include only clumped SNPs   
+    exposure_clumped <- exposure_data[which(exposure_data$SNP %in% exposure_local$rsid), ]   
+  
+    # Construct the full path for the output file   
+    output_file <- file.path(output_clump_dir, paste0("IV_", exposure_clumped$exposure[1], "_clumped.csv"))   
+    fwrite(exposure_clumped, output_file)   
+  
+  }, error = function(e) {   
+    # Print the filename and error message if an error occurs   
+    cat(sprintf("Error processing file '%s': %s\n", file, conditionMessage(e)), file = stderr())   
+    cat(basename(file), "\n", file = skipped_files, append = TRUE)   
+  })   
+}   
+  
+# Close the skipped files record   
+close(skipped_files)   
+  
+# Remove all snp files   
+file.remove(IV_snp_files)   
+  
+# Print completion message   
+cat("Clumping completed. Skipped files have been recorded in skipped_files.txt.\n")   
+  
+# Set working directory to the output clump directory   
+setwd(output_clump_dir)   
+  
+# List all files with the specified pattern in the output clump directory   
+exposure_clump_files <- list.files(path = output_clump_dir, pattern = "_clumped\\.csv$")   
+  
+# Initialize a variable to store combined data   
+combined_data <- NULL   
+  
+# Read and combine all clumped data files   
+for (file in exposure_clump_files) {   
+  temp_data <- fread(file)   
+  if (is.null(combined_data)) {   
+    combined_data <- temp_data   
+  } else {   
+    combined_data <- rbindlist(list(combined_data, temp_data), fill = TRUE)   
+  }   
+}   
+  
+# Save the combined data to a new CSV file   
+fwrite(combined_data, "IV_final_clumped.csv")   
+  
+# Print completion message   
+cat("IV processing completed.\n")

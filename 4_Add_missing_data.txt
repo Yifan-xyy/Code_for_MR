@@ -1,0 +1,118 @@
+Adding Missing Data
+
+# --------------Ch to SNP--------------
+# Remove all objects from the current environment  
+# Install necessary packages (uncomment if not already installed)  
+# BiocManager::install("MungeSumstats", force = TRUE)  
+# BiocManager::install("BSgenome.Hsapiens.1000genomes.hs37d5", force = TRUE)  
+  
+# Set the working directory  
+setwd("working_directory")  
+  
+# Load the necessary libraries  
+library(data.table)  
+# Load the data (Here, example filename is "Sample_xxx.csv")  
+
+Res <- fread("Sample_xxx.csv")  
+  
+# Rename the columns for consistency (optional)  
+colnames(Res) <- c("CHR", "POS", "A1", "A2", "EAF", "Beta", "SE", "Pval")  
+ 
+# -------------- Adding missing SNP id  --------------
+data1 <- fread("Sample_without_snp.csv")  
+
+# Load additional libraries for SNP format conversion  
+library(MungeSumstats)  
+library(BSgenome.Hsapiens.1000genomes.hs37d5)  
+library(SNPlocs.Hsapiens.dbSNP144.GRCh37)  
+  
+# Core code for SNP format conversion  
+format_sumstats(path = Res, ref_genome = "GRCh37", dbSNP = 144, save_path = "Sample_snp.tsv.gz")  
+  
+# Read the converted file and export it as CSV  
+data <- fread("Sample_snp.tsv.gz")  
+fwrite(data, "Sample_snp.csv")  
+  
+# -------------- Adding Phenotype to outcome files  --------------
+library(data.table)  
+  
+# Set the folder path containing the outcome files  
+folder_path <- "F:/IDP_project/GWAS_Outs/Outcome_total/GWAS_rename"  
+  
+# Get the names of all files in the folder  
+files <- list.files(folder_path, full.names = TRUE)  
+  
+# Iterate over each file  
+for (file in files) {  
+  # Read the file  
+  data <- fread(file)  
+    
+  # Construct a new file path and name (output to the same folder with "_A.csv" extension)  
+  # Extract the filename without the extension  
+  base_name <- tools::file_path_sans_ext(basename(file))  
+  data$Phenotype <- base_name  
+  # Construct the new file path  
+  new_file_path <- file.path(folder_path, paste0(base_name, "_A.csv"))  
+    
+  # Write the updated data to a new CSV file  
+  fwrite(data, file = new_file_path)  
+}  
+  
+# Note: If your original files are already CSV and you just want to copy or convert their format,  
+# you may need to consider the file extension (e.g., skip files that are already .csv).  
+# This can be achieved by adding conditional statements.  
+  
+# --------------Convert z and p values to beta and se  --------------
+data <- transform(data, se = 1/sqrt((2*eaf)*(1-(eaf))*(NEFF+(z^2))))  
+data <- transform(data, beta = z*(1/sqrt((2*eaf)*(1-(eaf))*(NEFF+(z^2)))))  
+  
+# Write the converted data to a CSV file  
+  
+# -------------- Supplementing missing EAF values --------------
+
+library(data.table)  
+outcome_files <- list.files(pattern = "\\.csv$")  
+maf_data <- fread("D:/OneclickDatabase/bfile/fileFrequency.frq")  
+setDT(maf_data)[, SNP := as.character(SNP)]  
+  
+for (file in outcome_files) {  
+  # Read the outcome file  
+  outcome_data <- fread(file)  
+  setDT(outcome_data)[, SNP := as.character(SNP)]  
+    
+  # Merge with the MAF data based on the SNP column  
+  merged_data <- merge(outcome_data, maf_data, by.x = "SNP", by.y = "SNP", all.x = TRUE)  
+  # Rename the MAF column to EAF  
+  setnames(merged_data, "MAF", "eaf")  
+    
+  # Write the merged data to a new CSV file  
+  fwrite(merged_data, file = paste0(file, "_eaf.csv"))  
+}  
+  
+# Replace NA or empty values in the EAF column with 0.5  
+data1 <- fread("Sample_without_EAF.csv")  
+
+  
+library(dplyr)  
+  
+data1 <- data1 %>%  
+  mutate(eaf = if_else(is.na(eaf), 0.5, eaf))  
+
+fwrite(data1, "Sample_with_EAF.csv")  
+
+  
+# --------------Manually supplementing missing N and beta values  --------------
+library(data.table)  
+  
+data1 <- fread("sample.csv")  
+  
+# Add sample sizes  
+data1$samplesize <- as.numeric()  
+
+  
+# Convert odds ratios (or) to beta values for certain datasets  
+data6 <- transform(data6, beta = log(or))  
+
+  
+# Write the updated datasets to new CSV files  
+fwrite(data1, "Sample_final.csv")  

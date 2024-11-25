@@ -1,0 +1,43 @@
+Package_pre.txt
+################################################  
+################################################  
+
+
+# if(!require("tidyr"))  
+install.packages("tidyr", update = FALSE, ask = FALSE)  
+# if(!require("dplyr"))  
+install.packages("dplyr", update = FALSE, ask = FALSE)  
+# if(!require("ggplot2"))  
+install.packages("ggplot2", update = FALSE, ask = FALSE)  
+# if(!require("data.table"))  
+install.packages("data.table", update = FALSE, ask = FALSE)  
+# if(!require("devtools"))  
+install.packages("devtools", update = FALSE, ask = FALSE)  
+  
+if(!require("BiocManager"))  
+  install.packages("BiocManager", update = FALSE, ask = FALSE)  
+  
+
+# Installation of Mendelian Randomization Packages ------------  
+## TwoSampleMR package  
+# If the remotes package is not installed, install it first  
+if(!require("remotes"))  
+  install.packages("remotes", update = FALSE, ask = FALSE)  
+# If the devtools package is not installed, install it first  
+if(!require("devtools"))  
+  install.packages("devtools", update = FALSE, ask = FALSE)  
+# If TwoSampleMR is not installed, install it  
+# remotes::install_github("MRCIEU/TwoSampleMR")  
+
+if(!require("TwoSampleMR"))  
+  remotes::install_github("MRCIEU/TwoSampleMR")  
+
+# remotes::install_github("MRCIEU/TwoSampleMR")  
+# remotes::install_github("MRCIEU/MRInstruments")  
+if(!require("MRInstruments"))  
+  remotes::install_github("MRCIEU/MRInstruments")  
+# ps: if remotes doesn't work, try devtools  
+  
+### mr-presso package  
+if(!require("MRPRESSO"))  
+  devtools::install_github("rondolab/MR-PRESSO")  

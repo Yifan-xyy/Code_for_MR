@@ -1,0 +1,139 @@
+library(data.table)  
+library(rio)  
+library(Oneclick)  
+library(dplyr)  
+library(fdrtool)  
+library(plinkbinr)  
+library(ieugwasr)  
+library(flextable)  
+library(TwoSampleMR)  
+  
+# Step 1: Process exposures  
+# Extract instrumental variables (IVs) from all exposures, clump them, and then merge  
+# After merging, extract the overlapping parts of each exposure and the merged exposures  
+workspace <- "E:/mv_MR_XYY"  
+setwd(workspace)  
+IV_folder_path <- "D:/GWAS_data/DTI_ukbiobank_mean" # Folder where the original IV files are stored  
+skipped_files <- file("skipped_files.txt", open = "w") # Error log file  
+IV_files <- list.files(path = IV_folder_path, pattern = "\\.csv$", full.names = TRUE) # Get file names with complete paths  
+  
+# Files with IVs that have been clumped for the first time, for subsequent selection and merging  
+exposure_clumped_folder_path <- "E:/mv_MR_XYY/IV_clump_summary"  
+exposure_clumped_files <- list.files(exposure_clumped_folder_path, pattern = "\\.csv$", full.names = TRUE)  
+  
+outcome_folder_path <- "D:/GWAS_data/psychiatric_disorders" # Folder path for outcomes  
+outcome_files <- list.files(outcome_folder_path, pattern = "\\.csv$", full.names = TRUE)  
+  
+# Read the CSV file containing the correspondence between exposure and outcome  
+map_data <- read.csv("MV_MR_ref.csv", stringsAsFactors = FALSE)  
+map_data <- na.omit(map_data)  
+  
+# Initialize an empty list to store merged data frames  
+merged_data_list <- list()  
+  
+for (outcome in unique(map_data$outcome)) {  
+  # Create a folder for the current outcome, and all related data will be stored here  
+  dir_name <- paste0(outcome)  
+  dir.create(dir_name)  
+    
+  # Find all exposures corresponding to the current outcome  
+  exposures <- map_data$exposure[map_data$outcome == outcome]  
+    
+  # Initialize an empty data frame to store all clumped data for the current outcome  
+  clump_data <- NULL  
+    
+  # Traverse all exposures under the current outcome  
+  for (exposure in exposures) {  
+    # Build the path of the clumped file  
+    clump_file_path <- file.path(exposure_clumped_folder_path, paste0("IV_", exposure, "_clumped.csv"))  
+    # Read the clumped file  
+    if (file.exists(clump_file_path)) {  
+      temp_data <- fread(clump_file_path, stringsAsFactors = FALSE)  
+      # Add the current clumped data to clump_data  
+      if (is.null(clump_data)) {  
+        clump_data <- temp_data  
+      } else {  
+        clump_data <- rbind(clump_data, temp_data)  
+      }  
+    } else {  
+      warning(paste("Clump file not found for exposure:", exposure))  
+    }  
+  }  
+    
+  # Output the first IV file after merging  
+  output_first_IV_file <- file.path(paste0("E:/mv_MR_XYY/", outcome), paste0(outcome, "_mviv_first.csv"))  
+  fwrite(clump_data, output_first_IV_file)  
+    
+  # Deduplicate and clump again after merging  
+  temp <- clump_data  
+  temp$id.exposure <- 1  
+  temp <- temp[order(temp$pval.exposure, decreasing = FALSE), ]  
+  temp <- subset(temp, !duplicated(SNP))  
+  exposure_local <- ld_clump(  
+    dplyr::tibble(rsid = temp$SNP, pval = temp$pval.exposure),  
+    clump_kb = 10000,  
+    clump_r2 = 0.001,  
+    plink_bin = "D:/R-4.4.1/library/plinkbinr/bin/plink_Windows.exe",  
+    bfile = "D:/OneclickDatabase/bfile/EUR"  
+  )  
+  exposure_clumped1 <- clump_data[which(clump_data$SNP %in% exposure_local$rsid), ]  
+    
+  # If exposure_clumped1 is not empty, add it to merged_data_list  
+  if (!is.null(exposure_clumped1)) {  
+    merged_data_list[[outcome]] <- exposure_clumped1  
+  }  
+}  
+  
+# The above steps complete the merging of all IVs  
+# merged_data_list is a three-dimensional matrix composed of:  
+# outcome name * (all data of exposure corresponding to outcome after clumping)  
+# Each name corresponds to an outcome  
+  
+for (name in names(merged_data_list)) {  
+  # Obtain all data corresponding to the outcome  
+  outcome_exposure_data <- merged_data_list[[name]]  
+  # Get exposures from this data  
+  exposures2 <- unique(outcome_exposure_data$exposure)  
+    
+  # Read the original file corresponding to each exposure and extract the SNPs and all information corresponding to the merged IVs  
+  merged_snp_data <- list()  
+  for (expo in exposures2) {  
+    # Build the path to read the original file  
+    IV_file_path <- file.path(IV_folder_path, paste0(expo, ".csv"))  
+    # Read the original file  
+    if (file.exists(IV_file_path)) {  
+      IV_data <- fread(IV_file_path)  
+      # Extract all unique SNPs from outcome_exposure_data  
+      unique_snps <- unique(outcome_exposure_data$SNP)  
+      # Filter out the rows in IV_data that match unique_snps  
+      matched_IV_data <- IV_data[IV_data$SNP %in% unique_snps, ]  
+      # If merged_snp_data is empty, assign it directly  
+      if (is.null(merged_snp_data[[expo]])) {  
+        merged_snp_data[[expo]] <- matched_IV_data  
+      } else {  
+        # If there may be duplicate SNPs but different information between clump files, keep all duplicates  
+        merged_snp_data[[expo]] <- rbind(merged_snp_data[[expo]], matched_IV_data)  
+      }  
+    } else {  
+      warning(paste("Clump file not found for expo:", expo))  
+    }  
+  }  
+    
+  # Merge SNPs from different exposures, and the number of merged SNPs is the number of exposures times the number of merged IVs  
+  final_merged_data <- bind_rows(merged_snp_data)  
+    
+  # Write the multivariate instrumental variable results for each outcome to the corresponding folder  
+  output_file <- file.path(paste0("E:/mv_MR_XYY/", name), paste0(name, "_mviv_final.csv"))  
+  write.csv(final_merged_data, output_file, row.names = FALSE)  
+    
+  # Then read the original file corresponding to each outcome and extract the content matching the IVs, output as a new outcome file  
+  # The above steps are because the built-in read_outcome function is too slow, so use the data.table package to filter first  
+  outcome_file_path <- file.path(outcome_folder_path, paste0(name, ".csv"))  
+  # Read the original outcome file  
+  current_out_dt <- fread(outcome_file_path)  
+  outcome_temp_dt <- current_out_dt[which(current_out_dt$SNP %in% final_merged_data$SNP), ]  
+  outcome_temp_path <- file.path(paste0(workspace, "/", name), paste0(name, "_mvout_final.csv"))  
+  fwrite(outcome_temp_dt, outcome_temp_path)  
+}  
+  
+# The above steps obtain multivariate IVs and OUTs, which are stored in the corresponding folders respectively.

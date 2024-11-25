@@ -1,0 +1,207 @@
+# Load necessary libraries  
+library(data.table)  
+library(rio)  
+library(Oneclick)  
+library(dplyr)  
+library(flextable)  
+library(fdrtool)  
+library(TwoSampleMR)  
+library(plinkbinr)  
+library(ieugwasr)  
+library(tidyr)  
+library(stringr)  
+  
+# Set workspace  
+workspace <- "E:/univariable_MR_XYY_clean"  
+setwd(workspace)  
+  
+# Define paths  
+outcome_folder_path <- "D:/GWAS_data/psychiatric_disorders"  
+exposure_clumped_folder_path <- paste0(workspace, "/IV_clump_summary")  
+  
+# List outcome files  
+outcome_files <- list.files(outcome_folder_path, pattern = "\\.csv$", full.names = TRUE)  
+  
+# List clumped exposure files  
+exposure_clumped_files <- list.files(exposure_clumped_folder_path, pattern = "\\.csv$", full.names = TRUE)  
+  
+# Read summary of clumped exposures  
+exposure_clumped_summary_file <- fread("E:/univariable_MR_XYY_clean/IV_final_clumped.csv", select = "SNP")  
+  
+# Read all clumped exposures  
+exposure_clumped <- fread(paste0(workspace, "/IV_final_clumped.csv"))  
+exposure_clumped$id.exposure <- exposure_clumped$exposure  
+  
+# Create output directory  
+dir.create("Out_summary")  
+output_outcome_dir <- paste0(workspace, "/Out_summary")  
+  
+# Remove confounding factors  
+look_ldlink.default <- function(dat, pop = "EUR", genome_build = "grch37", r2d = "r2", r2d_threshold = 0.1, win_size = 0) {  
+  if (typeof(dat) == "character") {  
+    has_id_or_file(dat)  
+    file_name <- get_file_name(dat)  
+    dat <- data.table::fread(dat)  
+  }  
+  if (!"LDlinkR" %in% installed.packages()[, "Package"]) {  
+    install.packages("LDlinkR")  
+  }  
+  if (!"SNP" %in% colnames(dat)) {  
+    stop("The output data does not have an SNP column, please check.")  
+  }  
+  snps <- unique(dat$SNP)  
+  prex <- format(Sys.time(), "%Y%m%d%H%M%S")  
+  file_name <- paste0("snps_trait_ldlink_ldtrait_", prex, ".csv")  
+    
+  if (length(snps) > 50) {  
+    message("Too much data, performing split request.")  
+    n <- 50  
+    num_groups <- ceiling(length(snps) / n)  
+    group <- gl(num_groups, n, length = length(snps))  
+    split_array <- split(snps, group)  
+    res <- plyr::ldply(split_array, function(x) {  
+      aa <- NULL  
+      tryCatch({  
+        aa <- LDlinkR::LDtrait(snps = x, pop = pop, token = "a88fcbf3a5b7",  
+                               genome_build = genome_build, r2d = r2d, r2d_threshold = r2d_threshold, win_size = win_size)  
+        data.table::fwrite(aa, file_name, append = T)  
+      }, error = function(e) {  
+      })  
+      return(aa)  
+    }, .progress = "text")  
+  } else {  
+    res <- LDlinkR::LDtrait(snps = dat$SNP, pop = pop, token = "a88fcbf3a5b7",  
+                            genome_build = genome_build, r2d = r2d, r2d_threshold = r2d_threshold, win_size = win_size)  
+    data.table::fwrite(res, file_name)  
+  }  
+  message("Output file: ", file_name)  
+  return(res)  
+}  
+  
+# Use the function to remove confounding factors  
+exposure_clump_sum <- exposure_clumped  
+dat_new <- look_ldlink.default(dat = exposure_clump_sum, pop = "EUR", genome_build = "grch37")  
+  
+# Read SNP traits to exclude  
+IV_snp_traits <- fread(paste0(workspace, "/SNP_trait.csv"))  
+  
+# Convert data tables to data.table format for faster processing  
+setDT(exposure_clumped)  
+setDT(IV_snp_traits)  
+  
+# Remove SNPs found in the trait file  
+exposure_clumped <- anti_join(exposure_clumped, IV_snp_traits, by = "SNP")  
+  
+# Extract outcomes containing all IVs, and save them to a new folder  
+for (file_path in outcome_files) {  
+  current_dt <- fread(file_path)  
+  outcome_temp_dt <- merge(current_dt, exposure_clumped_summary_file, by = "SNP", all.x = FALSE)  
+  outcome_temp_path <- file.path(output_outcome_dir, basename(file_path))  
+  fwrite(outcome_temp_dt, outcome_temp_path)  
+}  
+  
+# Read outcome files in the new folder and harmonize them one by one  
+outcome_snp_files <- list.files(output_outcome_dir, pattern = "\\.csv$", full.names = TRUE)  
+for (file_outcome in outcome_snp_files) {  
+  outcome_data <- read_outcome_data(file_outcome, snps = NULL, sep = ",",  
+                                    phenotype_col = "Phenotype", snp_col = "SNP", beta_col = "beta", se_col = "se",  
+                                    eaf_col = "eaf", effect_allele_col = "effect_allele", other_allele_col = "other_allele",  
+                                    pval_col = "pval", samplesize_col = "samplesize", min_pval = 1e-200, log_pval = FALSE,  
+                                    chr_col = "chr", pos_col = "pos")  
+  outcome_data$id.outcome <- outcome_data$outcome  
+  harmonise_dat <- U4_harmonise_data(exposure_clumped, outcome_data)  
+  temp_file_path <- file.path(workspace, paste0(basename(file_outcome), "_harmonised.csv"))  
+  fwrite(harmonise_dat, temp_file_path)  
+}  
+cat("Harmonization completed successfully.\n")  
+  
+# Merge harmonized data  
+outcome_harmonise_files <- list.files(path = workspace, pattern = "_harmonised\\.csv$")  
+combined_data <- NULL  
+for (file in outcome_harmonise_files) {  
+  temp_data <- fread(file)  
+  if (is.null(combined_data)) {  
+    combined_data <- temp_data  
+  } else {  
+    combined_data <- rbindlist(list(combined_data, temp_data), fill = TRUE)  
+  }  
+}  
+  
+# Create results directory  
+dir.create(paste0(workspace, "/", "forward_mr_res"))  
+res_temp_path <- file.path(paste0(workspace, "/", "forward_mr_res"), ("DTI_2_Disease_harmonised_final1.csv"))  
+fwrite(combined_data, res_temp_path)  
+cat("Merged harmonized data saved successfully.\n")  
+file.remove(outcome_harmonise_files)  
+  
+# Perform Mendelian Randomization  
+dat <- fread(paste0(workspace, "/forward_mr_res/DTI_2_Disease_harmonised_final1.csv"))  
+dat <- as.data.frame(dat)  
+res <- U5_mr(dat, method_list = c("mr_wald_ratio", "mr_egger_regression", "mr_weighted_median", "mr_ivw"), run_mr_presso = TRUE, workers = 11)  
+res_temp_path <- file.path(paste0(workspace, "/", "forward_mr_res"), ("DTI_2_Disease_res_clean_Presso1.csv"))  
+fwrite(res, res_temp_path)  
+  
+# Remove outliers and perform MR again  
+IV_with_outliers <- exposure_clumped  
+outlier_file <- fread("SNP_trait.csv")  
+outlier_file <- outlier_file %>% separate_rows(SNP, sep = " ")  
+IV_without_outliers <- anti_join(IV_with_outliers, outlier_file, by = c("SNP", "exposure", "outcome"))  
+fwrite(IV_without_outliers, "IV_without_outliers.csv", row.names = FALSE)  
+  
+outlier_file <- fread("SNP_outliers3.csv")  
+outlier_file <- outlier_file %>% separate_rows(SNP, sep = " ")  
+  
+# Re-harmonize outcome files excluding outliers  
+for (file_outcome in outcome_snp_files) {  
+  outcome_data <- read_outcome_data(file_outcome, snps = NULL, sep = ",",  
+                                    phenotype_col = "Phenotype", snp_col = "SNP", beta_col = "beta", se_col = "se",  
+                                    eaf_col = "eaf", effect_allele_col = "effect_allele", other_allele_col = "other_allele",  
+                                    pval_col = "pval", samplesize_col = "samplesize", min_pval = 1e-200, log_pval = FALSE,  
+                                    chr_col = "chr", pos_col = "pos")  
+  outcome_data$id.outcome <- outcome_data$outcome  
+  harmonise_dat <- U4_harmonise_data(exposure_clumped, outcome_data)  
+  harmonise_dat <- anti_join(harmonise_dat, outlier_file, by = c("SNP", "exposure", "outcome"))  
+  temp_file_path <- file.path(workspace, paste0(basename(file_outcome), "_harmonised.csv"))  
+  fwrite(harmonise_dat, temp_file_path)  
+}  
+cat("Harmonization completed successfully after removing outliers.\n")  
+  
+# Merge harmonized data after removing outliers  
+outcome_harmonise_files <- list.files(path = workspace, pattern = "_harmonised\\.csv$")  
+combined_data <- NULL  
+for (file in outcome_harmonise_files) {  
+  temp_data <- fread(file)  
+  if (is.null(combined_data)) {  
+    combined_data <- temp_data  
+  } else {  
+    combined_data <- rbindlist(list(combined_data, temp_data), fill = TRUE)  
+  }  
+}  
+  
+dir.create(paste0(workspace, "/", "forward_mr_res"))  
+res_temp_path <- file.path(paste0(workspace, "/", "forward_mr_res"), ("DTI_2_Disease_harmonised_final4.csv"))  
+fwrite(combined_data, res_temp_path)  
+cat("Merged harmonized data after removing outliers saved successfully.\n")  
+file.remove(outcome_harmonise_files)  
+  
+# Perform MR again after removing outliers  
+dat <- fread(paste0(workspace, "/forward_mr_res/DTI_2_Disease_harmonised_final4.csv"))  
+dat <- as.data.frame(dat)  
+res <- U5_mr(dat, method_list = c("mr_wald_ratio", "mr_egger_regression", "mr_weighted_median", "mr_ivw", "mr_weighted_mode"), run_mr_presso = FALSE, workers = 11)  
+res_temp_path <- file.path(paste0(workspace, "/", "forward_mr_res"), ("DTI_2_Disease_res_clean_Presso4withmode.csv"))  
+fwrite(res, res_temp_path)  
+  
+# Perform additional corrections and multiple comparisons  
+res <- fread(file.path(paste0(workspace, "/", "forward_mr_res_without_outliers"), ("DTI_2_Disease_res_Presso.csv")))  
+dat <- fread(file.path(paste0(workspace, "/", "forward_mr_res_without_outliers"), ("DTI_2_Disease_harmonised_final.csv")))  
+# res <- U5_add_steiger(res, dat)  
+  
+Data <- fread(file.path(paste0(workspace, "/", "forward_mr_res"), ("DTI_2_Disease_res_clean_Presso4.csv")))  
+Data <- Data %>%  
+  mutate(P3 = if_else(is.na(`pval_Inverse variance weighted`), `pval_Wald ratio`, `pval_Inverse variance weighted`)) %>%  
+  group_by(outcome) %>%  
+  mutate(qval = fdrtool::fdrtool(P3, statistic = "pvalue")$qval) %>%  
+  ungroup()  
+  
+data_temp_path <- file.path(paste0(workspace, "/", "forward_mr_res"), ("DTI_2_Disease_res_multiple_cor.csv"))  
+fwrite(Data, data_temp_path)

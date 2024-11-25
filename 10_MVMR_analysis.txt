@@ -1,0 +1,160 @@
+MVMR_analysis.txt
+r
+library(data.table)  
+library(rio)  
+library(Oneclick)  
+library(dplyr)  
+library(fdrtool)  
+library(plinkbinr)  
+library(ieugwasr)  
+library(flextable)  
+library(TwoSampleMR)  
+library(MendelianRandomization)  
+library(ggplotify)  
+library(MRPRESSO)  
+  
+# Set workspace and working directory  
+workspace <- "E:/mv_MR_XYY"  
+setwd(workspace)  
+  
+# Load map data  
+map_data <- read.csv("mv_MR_ref.csv", stringsAsFactors = FALSE)  
+mv_combined_data <- NULL  
+  
+# Initialize skipped files log  
+skipped_files <- file("skipped_files.txt", open = "w")  
+  
+# Loop through each outcome  
+for (outcome in unique(map_data$outcome)) {  
+  tryCatch({  
+    # Read exposure data  
+    exposure_dat <- read_exposure_data(  
+      file <- file.path(paste0(workspace, "/", outcome), paste0(outcome, "_mviv_final.csv")),  
+      chr_col = "chr", pos_col = "pos", phenotype_col = "Phenotype", snp_col = "SNP",  
+      beta_col = "beta", se_col = "se", eaf_col = "eaf", samplesize_col = "samplesize",  
+      effect_allele_col = "effect_allele", other_allele_col = "other_allele", pval_col = "pval",  
+      id_col = "Phenotype", sep = ","  
+    )  
+    # Standardize exposure data ID  
+    exposure_dat$id.exposure <- exposure_dat$exposure  
+      
+    # Read outcome data  
+    mv_outcome <- read_outcome_data(  
+      file <- file.path(paste0(workspace, "/", outcome), paste0(outcome, "_mvout_final.csv")),  
+      chr_col = "chr", pos_col = "pos", phenotype_col = "Phenotype", snp_col = "SNP",  
+      beta_col = "beta", se_col = "se", eaf_col = "eaf", samplesize_col = "samplesize",  
+      effect_allele_col = "effect_allele", other_allele_col = "other_allele", pval_col = "pval",  
+      id_col = "Phenotype", sep = ","  
+    )  
+    # Standardize outcome data ID  
+    mv_outcome$id.outcome <- mv_outcome$outcome  
+      
+    # Harmonize exposure and outcome data  
+    mv_dat <- M3_mv_harmonise_data(mv_exposures = exposure_dat, mv_outcome = mv_outcome)  
+    cat(paste0("Completed harmonisation for outcome: ", outcome, "\n"))  
+      
+    # Convert harmonised data to MendelianRandomization input format  
+    MV_Input <- M4_mv_dat_to_MV_Input(mv_dat)  
+    cat(paste0("Completed format conversion for outcome: ", outcome, "\n"))  
+      
+    # Perform multivariate Mendelian randomization analysis  
+    mv_res_all <- M5_mvmr(MV_Input = MV_Input, mv_method = c("mr_mvivw", "mr_mvegger", "mr_mvlasso", "mr_mvmedian"))  
+    cat(paste0("Completed MVMR analysis for outcome: ", outcome, "\n"))  
+      
+    # Optionally add mvcML method (uncommented for reference)  
+    # mv_res_all <- M5_add_mvcML(mv_res_all, object = MV_Input, n = min(exposure_dat$samplesize.exposure, mv_outcome$samplesize.outcome), DP = TRUE, num_pert = 200)  
+    # cat(paste0("Completed mvcML method addition for outcome: ", outcome, "\n"))  
+      
+    # Optionally add mvgmm method (uncommented for reference)  
+    # mv_res_all <- M5_add_mvgmm(mv_res_all = mv_res_all, object = MV_Input, nx = c(exposure_dat$samplesize.exposure), ny = min(mv_outcome$samplesize.outcome))  
+      
+    # Optionally add mvpcgmm method (uncommented for reference)  
+    # mv_res_all <- M5_add_mvpcgmm(mv_res_all = mv_res_all, object = MV_Input, nx = c(exposure_dat$samplesize.exposure), ny = min(mv_outcome$samplesize.outcome))  
+      
+    # Create multivariate forest plot  
+    P1 <- M6_forest_plot(df = mv_res_all, exposure_order = "", pal_color = (ggsci::pal_frontiers("default"))(10))  
+    P1 <- as.ggplot(P1)  
+    ggsave(P1, file = file.path(paste0(workspace, "/", outcome), paste0(outcome, "_forest_plot.pdf")), width = 10, height = 12)  
+      
+    # Calculate conditional F-statistic  
+    fval <- M7_strength_mvmr(MV_Input)  
+    fval <- as.data.frame(fval)  
+      
+    # Save results  
+    output_mv_res_path <- file.path(paste0(workspace, "/", outcome), paste0(outcome, "_mv_res.csv"))  
+    output_f_path <- file.path(paste0(workspace, "/", outcome), paste0(outcome, "_Fval.csv"))  
+    output_mv_harmonise_R_path <- file.path(paste0(workspace, "/", outcome), paste0(outcome, "_mv.RData"))  
+    output_mv_harmonise_path <- file.path(paste0(workspace, "/", outcome), paste0(outcome, "_mv.csv"))  
+    fwrite(mv_res_all, output_mv_res_path)  
+    fwrite(fval, output_f_path, row.names = TRUE)  
+    fwrite(mv_dat, output_mv_harmonise_path)  
+    save.image(file = output_mv_harmonise_R_path)  
+      
+    cat(paste0("Completed multivariate analysis for outcome: ", outcome, "\n"))  
+      
+    # Add results to combined data  
+    mv_combined_temp_data <- mv_res_all  
+    if (is.null(mv_combined_data)) {  
+      mv_combined_data <- mv_combined_temp_data  
+    } else {  
+      mv_combined_data <- rbindlist(list(mv_combined_data, mv_combined_temp_data), fill = TRUE)  
+    }  
+    cat(paste0("Added results for outcome: ", outcome, " to combined data.\n"))  
+  }, error = function(e) {  
+    # Log error and skipped files  
+    cat(sprintf("Error processing file '%s': %s\n", file, conditionMessage(e)), file = stderr())  
+    cat(basename(file), "\n", file = skipped_files, append = TRUE)  
+  })  
+}  
+  
+# Close skipped files log and save combined results  
+close(skipped_files)  
+fwrite(mv_combined_data, "mvmr_res_summary.csv")  
+cat("All multivariate analyses completed. Results saved individually and combined in the working directory.\n")  
+  
+# MR-PRESSO analysis (example for the second outcome in the list)  
+ref.list <- unique(map_data$outcome)  
+outcome <- ref.list[2]  
+Rdata_path <- file.path(paste0(workspace, "/", outcome), paste0(outcome, "_mv.RData"))  
+load(file.path(paste0(workspace, "/", outcome), paste0(outcome, "_mv.RData")))  
+mvdat <- mv_dat  
+  
+# Prepare summary statistics for MR-PRESSO  
+SummaryStats <- cbind(mvdat[["outcome_beta"]], mvdat[["exposure_beta"]][, 1], mvdat[["exposure_beta"]][, 2], mvdat[["exposure_beta"]][, 3],  
+                      mvdat[["exposure_se"]][, 1], mvdat[["exposure_se"]][, 2], mvdat[["exposure_se"]][, 3], mvdat[["outcome_se"]])  
+SummaryStats <- data.frame(SummaryStats)  
+  
+# Run MR-PRESSO  
+result_mr_presso <- mr_presso(BetaOutcome = "X1", BetaExposure = c("X2", "X3", "X4"), SdOutcome = "X8", SdExposure = c("X5", "X6", "X7"),  
+                              OUTLIERtest = TRUE, DISTORTIONtest = TRUE, data = SummaryStats, NbDistribution = 1000, SignifThreshold = 0.05)  
+  
+# Print MR-PRESSO results  
+result_mr_presso  
+result_mr_presso[["Main MR results"]]  
+result_mr_presso[["MR-PRESSO results"]]  
+  
+# Identify and print outlier SNPs  
+label <- result_mr_presso[["MR-PRESSO results"]]$`Distortion Test`$`Outliers Indices`  
+label_snp <- row.names(result_mr_presso[["MR-PRESSO results"]]$"Outlier Test")[label]  
+label_snps <- dput(label_snp)  
+cat("Outlier SNPs identified by MR-PRESSO:\n")  
+print(label_snps)  
+  
+# Remove outliers and save cleaned exposure data  
+mv_exposures2 <- mv_exposures %>% filter(!SNP %in% label_snps)  
+write.table(mv_exposures2, file = "mv_exposures2.csv", sep = ",", quote = FALSE, col.names = NA)  
+  
+# Function to source all R scripts in a directory for confounder removal  
+source_subdirectory_all_R_files <- function(path) {  
+  files <- list.files(file.path(path, "source"), pattern = "\\.R$", full.names = TRUE, all.files = TRUE)  
+  for (file in files) {  
+    source(file)  
+  }  
+}  
+  
+# Source all confounder removal scripts  
+source_subdirectory_all_R_files("E:/mv_MR_XYY")  
+  
+# Remove confounders using LDlinkR  
+exposure_clump_sum <- fread("E:/mv_MR_XYY/IV_clump_summary/IV_final_clumped.csv")  
+dat_new <- look_ldlink.default(dat = exposure_clump_sum, pop = "EUR", genome_build = "grch37")

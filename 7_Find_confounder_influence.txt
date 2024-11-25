@@ -1,0 +1,52 @@
+library(dplyr)  
+library(tidyr)  
+library(data.table)  
+  
+# First, compare the harmonised data with outliers removed to select differential SNPs  
+# Read data  
+ref <- read.csv("ref.csv")  
+file1 <- read.csv("DTI_2_Disease_harmonised_withoutoutliers_final5.csv") # Harmonised data with confounders  
+file2 <- read.csv("clean-DTI_2_Disease_harmonised_final4.csv") # Filtered data  
+  
+# Select SNPs that have the same exposure and outcome as the ref file  
+filtered_file1 <- inner_join(file1, ref, by = c("outcome" = "outcome", "exposure" = "exposure"))  
+filtered_file2 <- inner_join(file2, ref, by = c("outcome" = "outcome", "exposure" = "exposure"))  
+  
+# Find SNPs that are only present before confounders are removed  
+unique_to_file1 <- anti_join(filtered_file1, filtered_file2, by = "SNP")  
+  
+# Next, compare the harmonised data without outliers removed to select differential SNPs  
+file3 <- read.csv("DTI_2_Disease_harmonised_final.csv") # Harmonised data with confounders  
+file4 <- read.csv("DTI_2_Disease_harmonised_final1.csv") # Filtered data  
+  
+# Select SNPs that have the same exposure and outcome as the ref file  
+filtered_file3 <- inner_join(file3, ref, by = c("outcome" = "outcome", "exposure" = "exposure"))  
+filtered_file4 <- inner_join(file4, ref, by = c("outcome" = "outcome", "exposure" = "exposure"))  
+  
+# Find SNPs that are only present before confounders are removed  
+unique_to_file2 <- anti_join(filtered_file3, filtered_file4, by = "SNP")  
+  
+# SNPs that appear in both comparisons are confounder SNPs  
+common_snps <- inner_join(unique_to_file1, unique_to_file2, by = "SNP")  
+  
+# Read the trait file  
+file5 <- read.csv("SNP_trait.csv")  
+  
+# Find the traits associated with each SNP (each SNP may have multiple traits)  
+matched_snps <- inner_join(common_snps, file5, by = "SNP")  
+  
+# Merge traits for each SNP  
+merged_trait <- matched_snps %>%  
+  group_by(outcome.x, exposure.x, SNP) %>%  
+  summarise(Traits = paste(GWAS_Trait, collapse = ";"), .groups = 'drop')  
+fwrite(merged_trait, "trait.csv")  
+  
+# Merge SNPs and traits for each outcome and exposure  
+merged_data <- merged_trait %>%  
+  group_by(outcome.x, exposure) %>%  
+  summarise(  
+    merged_SNP = paste(SNP, collapse = " "),  
+    merged_Trait = toString(unique(Traits)),  
+    .groups = 'drop'  
+  )  
+fwrite(merged_data, "trait_merged.csv")
